@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>金句卡片工厂-Canvas终极引擎</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 引入需要的字体 */
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;700;900&family=Zcool+KuaiLe&display=swap');
+        
+        body { font-family: 'Noto Sans SC', sans-serif; background-color: #1a1a1a; color: #e5e5e5; }
+        
+        /* 隐藏滚动条但保留功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 自定义细滚动条用于输入框 */
+        .input-scrollbar::-webkit-scrollbar { width: 4px; }
+        .input-scrollbar::-webkit-scrollbar-track { background: #222; }
+        .input-scrollbar::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+        .input-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        input:focus, textarea:focus { border-color: #3b82f6 !important; background-color: #2a2a2a !important; }
+
+        /* 选中高亮 */
+        .card-highlight {
+            outline: 4px solid #3b82f6;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+    </style>
+
+    <!-- 核心库 -->
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+        // --- 核心配置 ---
+        // 画布内部真实分辨率 (高清)
+        const CANVAS_WIDTH = 1200;
+        const CANVAS_HEIGHT = 1600;
+
+        const defaultCards = [
+            {
+                title: "纯Canvas引擎",
+                engTitle: "PURE CANVAS ENGINE",
+                icon: "🚀",
+                quote: "您现在的预览图就是最终结果。所有文字、线条都是通过坐标精准绘制的，彻底告别安卓Webview错位。",
+                desc: "这种方式就像在纸上画画，不管在什么设备上，像素位置永远固定。",
+                tag: "#终极方案 #像素级",
+                author: "@CanvasMaster",
+                scales: { title: 1.0, eng: 1.0, quote: 1.0, desc: 1.0 }
+            },
+            { title: "波普艺术测试", engTitle: "POP ART TEST", icon: "💥", quote: "看上面的标题，那是通过数学旋转绘制的，导出绝对不会歪。", desc: "Canvas 绘制旋转文字比 CSS 稳定一万倍。", tag: "#测试", author: "@Dev", scales: { title: 1.0, eng: 1.0, quote: 1.0, desc: 1.0 } },
+            { title: "多张预览", engTitle: "BATCH PREVIEW", icon: "👀", quote: "点击不同数量切换视图，点击卡片即可编辑。所见即所得。", desc: "性能极快，生成 50 张图也不会卡顿。", tag: "#高效", author: "@Dev", scales: { title: 1.0, eng: 1.0, quote: 1.0, desc: 1.0 } },
+        ];
+
+        // --- 绘图工具函数 ---
+        
+        // 自动换行绘制文本
+        const drawWrappedText = (ctx, text, x, y, maxWidth, lineHeight, align = 'left') => {
+            const words = text.split('');
+            let line = '';
+            const lines = [];
+
+            for (let n = 0; n < words.length; n++) {
+                const testLine = line + words[n];
+                const metrics = ctx.measureText(testLine);
+                const testWidth = metrics.width;
+                if (testWidth > maxWidth && n > 0) {
+                    lines.push(line);
+                    line = words[n];
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+
+            lines.forEach((l, i) => {
+                let drawX = x;
+                if (align === 'center') {
+                    drawX = x + (maxWidth - ctx.measureText(l).width) / 2;
+                } else if (align === 'right') {
+                    drawX = x + maxWidth - ctx.measureText(l).width;
+                }
+                ctx.fillText(l, drawX, y + (i * lineHeight));
+            });
+            
+            return lines.length * lineHeight; // 返回总高度
+        };
+
+        // --- 风格定义 (Canvas 绘图逻辑) ---
+        const styles = [
+            {
+                id: 'museum', name: '文物档案',
+                draw: (ctx, card, w, h) => {
+                    // 背景
+                    ctx.fillStyle = '#fdfbf7';
+                    ctx.fillRect(0, 0, w, h);
+                    
+                    // 双边框
+                    ctx.strokeStyle = '#292524'; // stone-800
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(20, 20, w - 40, h - 40);
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(28, 28, w - 56, h - 56);
+
+                    // 标题 (带下划线)
+                    ctx.fillStyle = '#1c1917';
+                    ctx.font = `900 ${100 * card.scales.title}px "Noto Serif SC"`;
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(card.title, 80, 100);
+                    const titleWidth = ctx.measureText(card.title).width;
+                    ctx.fillRect(80, 100 + 100 * card.scales.title + 10, titleWidth, 5);
+
+                    // 英文
+                    ctx.fillStyle = '#78716c';
+                    ctx.font = `bold ${30 * card.scales.eng}px sans-serif`;
+                    ctx.fillText(card.engTitle, 80, 100 + 100 * card.scales.title + 30);
+
+                    // 图标
+                    ctx.font = '100px sans-serif';
+                    ctx.fillText(card.icon, w - 180, 100);
+
+                    // 金句 (居中)
+                    ctx.fillStyle = '#292524';
+                    ctx.font = `bold ${60 * card.scales.quote}px "Noto Serif SC"`;
+                    const quoteY = h / 2 - 100;
+                    drawWrappedText(ctx, card.quote, 100, quoteY, w - 200, 90 * card.scales.quote, 'left');
+
+                    // 分割线
+                    ctx.fillStyle = '#d6d3d1';
+                    ctx.fillRect(80, h - 350, w - 160, 2);
+
+                    // 描述
+                    ctx.fillStyle = '#57534e';
+                    ctx.font = `italic ${40 * card.scales.desc}px "Noto Serif SC"`;
+                    drawWrappedText(ctx, card.desc, 110, h - 300, w - 220, 60 * card.scales.desc, 'left');
+                    ctx.fillStyle = '#a8a29e'; // 左侧竖线
+                    ctx.fillRect(80, h - 300, 5, 120);
+
+                    // 底部标签
+                    ctx.fillStyle = '#292524';
+                    ctx.fillRect(80, h - 120, ctx.measureText(card.tag).width + 40, 50);
+                    ctx.fillStyle = '#fdfbf7';
+                    ctx.font = '30px "Noto Serif SC"';
+                    ctx.fillText(card.tag, 100, h - 110);
+
+                    // 作者
+                    ctx.fillStyle = '#78716c';
+                    ctx.font = '30px monospace';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 80 - authW, h - 110);
+                }
+            },
+            {
+                id: 'rednote', name: '网红多巴胺',
+                draw: (ctx, card, w, h) => {
+                    // 渐变背景
+                    const grd = ctx.createLinearGradient(0, 0, w, h);
+                    grd.addColorStop(0, '#ffe4e6'); // rose-100
+                    grd.addColorStop(1, '#ccfbf1'); // teal-100
+                    ctx.fillStyle = grd;
+                    ctx.fillRect(0, 0, w, h);
+                    
+                    // 白边框
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 30;
+                    ctx.strokeRect(0, 0, w, h);
+
+                    // 标题 (快乐体)
+                    ctx.fillStyle = '#e11d48'; // rose-600
+                    ctx.font = `${140 * card.scales.title}px "Zcool KuaiLe"`;
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(card.title, 80, 100);
+
+                    // 英文
+                    ctx.fillStyle = '#0d9488'; // teal-600
+                    ctx.font = `bold ${35 * card.scales.eng}px sans-serif`;
+                    ctx.fillText(card.engTitle, 80, 100 + 140 * card.scales.title + 20);
+
+                    // 图标
+                    ctx.font = '120px sans-serif';
+                    ctx.fillText(card.icon, w - 200, 100);
+
+                    // 金句 (深青色)
+                    ctx.fillStyle = '#115e59';
+                    ctx.font = `bold ${64 * card.scales.quote}px sans-serif`;
+                    // 居中计算
+                    drawWrappedText(ctx, card.quote, 100, h/2 - 100, w - 200, 96 * card.scales.quote, 'left');
+
+                    // 装饰线
+                    ctx.fillStyle = '#0f766e';
+                    ctx.fillRect(80, h - 320, 100, 8);
+
+                    // 描述
+                    ctx.fillStyle = '#4b5563';
+                    ctx.font = `500 ${40 * card.scales.desc}px sans-serif`;
+                    drawWrappedText(ctx, card.desc, 80, h - 280, w - 160, 60 * card.scales.desc, 'left');
+
+                    // 底部胶囊标签
+                    const tagW = ctx.measureText(card.tag).width + 60;
+                    ctx.fillStyle = '#f43f5e';
+                    ctx.beginPath();
+                    ctx.roundRect(80, h - 120, tagW, 60, 30);
+                    ctx.fill();
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 32px sans-serif';
+                    ctx.fillText(card.tag, 110, h - 108);
+
+                    // 作者
+                    ctx.fillStyle = '#4b5563';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 80 - authW, h - 108);
+                }
+            },
+            {
+                id: 'pop', name: '波普艺术',
+                draw: (ctx, card, w, h) => {
+                    // 黄底
+                    ctx.fillStyle = '#facc15';
+                    ctx.fillRect(0, 0, w, h);
+                    // 黑边
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 20;
+                    ctx.strokeRect(10, 10, w-20, h-20);
+
+                    // 标题 (旋转)
+                    ctx.save();
+                    ctx.translate(100, 200);
+                    ctx.rotate(-5 * Math.PI / 180);
+                    ctx.fillStyle = '#000000';
+                    ctx.font = `italic 900 ${120 * card.scales.title}px sans-serif`;
+                    ctx.fillText(card.title, 0, 0);
+                    ctx.restore();
+
+                    // 英文 (旋转 + 白底蓝字)
+                    ctx.save();
+                    ctx.translate(120, 200 + 120 * card.scales.title);
+                    ctx.rotate(2 * Math.PI / 180);
+                    const engFont = `bold ${40 * card.scales.eng}px sans-serif`;
+                    ctx.font = engFont;
+                    const engW = ctx.measureText(card.engTitle).width;
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(-10, -40, engW + 20, 50);
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(-10, -40, engW + 20, 50);
+                    
+                    ctx.fillStyle = '#2563eb';
+                    ctx.fillText(card.engTitle, 0, -5);
+                    ctx.restore();
+
+                    // 图标
+                    ctx.font = '120px sans-serif';
+                    ctx.fillText(card.icon, w - 220, 150);
+
+                    // 金句 (白底黑字阴影框)
+                    const quoteBoxY = h/2 - 150;
+                    const quoteBoxH = 400; // 估算高度
+                    
+                    // 阴影
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(110, quoteBoxY + 10, w - 220, quoteBoxH);
+                    // 白框
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(100, quoteBoxY, w - 220, quoteBoxH);
+                    
+                    ctx.fillStyle = '#000000';
+                    ctx.font = `900 ${60 * card.scales.quote}px sans-serif`;
+                    drawWrappedText(ctx, card.quote, 140, quoteBoxY + 80, w - 300, 80 * card.scales.quote, 'left');
+
+                    // 底部
+                    ctx.fillStyle = '#000000';
+                    ctx.font = `bold ${40 * card.scales.desc}px sans-serif`;
+                    drawWrappedText(ctx, card.desc, 100, h - 300, w - 200, 60 * card.scales.desc, 'left');
+
+                    // 标签 (蓝底白字)
+                    const tagW = ctx.measureText(card.tag).width + 40;
+                    ctx.fillStyle = '#2563eb';
+                    ctx.fillRect(100, h - 140, tagW, 60);
+                    ctx.strokeRect(100, h - 140, tagW, 60);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(card.tag, 120, h - 98);
+
+                     // 作者
+                    ctx.fillStyle = '#000000';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 100 - authW, h - 98);
+                }
+            },
+             {
+                id: 'minimal', name: '极简留白',
+                draw: (ctx, card, w, h) => {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.strokeStyle = '#e5e7eb';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(20, 20, w - 40, h - 40);
+
+                    ctx.fillStyle = '#111827';
+                    ctx.font = `900 ${100 * card.scales.title}px sans-serif`;
+                    ctx.fillText(card.title, 80, 150);
+
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = `500 ${30 * card.scales.eng}px sans-serif`;
+                    ctx.fillText(card.engTitle, 80, 150 + 100 * card.scales.title + 10);
+
+                    ctx.font = '100px sans-serif';
+                    ctx.fillText(card.icon, w - 180, 150);
+
+                    ctx.fillStyle = '#1f2937';
+                    ctx.font = `italic bold ${60 * card.scales.quote}px "Noto Serif SC"`;
+                    drawWrappedText(ctx, card.quote, 100, h/2 - 50, w - 200, 100 * card.scales.quote, 'left');
+
+                    ctx.fillStyle = '#d1d5db';
+                    ctx.fillRect(80, h - 320, 60, 4);
+
+                    ctx.fillStyle = '#6b7280';
+                    ctx.font = `${40 * card.scales.desc}px sans-serif`;
+                    drawWrappedText(ctx, card.desc, 80, h - 280, w - 160, 60 * card.scales.desc, 'left');
+
+                    const tagW = ctx.measureText(card.tag).width + 40;
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(80, h - 120, tagW, 50);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '30px sans-serif';
+                    ctx.fillText(card.tag, 100, h - 85);
+
+                    ctx.fillStyle = '#9ca3af';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 80 - authW, h - 85);
+                }
+            },
+            {
+                id: 'cyber', name: '赛博故障',
+                draw: (ctx, card, w, h) => {
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.strokeStyle = '#22c55e';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(20, 20, w - 40, h - 40);
+                    
+                    // 顶部发光条
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = '#22c55e';
+                    ctx.fillStyle = '#22c55e';
+                    ctx.fillRect(20, 20, w-40, 10);
+                    ctx.shadowBlur = 0;
+
+                    ctx.fillStyle = '#22c55e';
+                    ctx.font = `italic 900 ${90 * card.scales.title}px monospace`;
+                    ctx.fillText(card.title.toUpperCase(), 80, 150);
+
+                    ctx.fillStyle = '#15803d';
+                    ctx.font = `${30 * card.scales.eng}px monospace`;
+                    ctx.fillText(card.engTitle, 80, 150 + 90 * card.scales.title + 10);
+
+                    ctx.font = '100px sans-serif';
+                    ctx.fillText(card.icon, w - 180, 150);
+
+                    ctx.fillStyle = 'rgba(20, 83, 45, 0.3)';
+                    ctx.fillRect(60, h/2 - 120, w-120, 300);
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = `${50 * card.scales.quote}px monospace`;
+                    drawWrappedText(ctx, card.quote, 100, h/2 - 60, w - 200, 80 * card.scales.quote, 'left');
+
+                    ctx.fillStyle = '#86efac';
+                    ctx.font = `${36 * card.scales.desc}px monospace`;
+                    drawWrappedText(ctx, card.desc, 80, h - 280, w - 160, 50 * card.scales.desc, 'left');
+
+                    ctx.fillStyle = '#22c55e';
+                    ctx.fillStyle = '#22c55e';
+                    ctx.fillRect(80, h - 120, ctx.measureText(card.tag).width + 30, 40);
+                    ctx.fillStyle = '#000000';
+                    ctx.font = '30px monospace';
+                    ctx.fillText(card.tag, 95, h - 90);
+
+                    ctx.fillStyle = '#15803d';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 80 - authW, h - 90);
+                }
+            },
+            {
+                id: 'dark', name: '深邃黑金',
+                draw: (ctx, card, w, h) => {
+                    ctx.fillStyle = '#18181b';
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.strokeStyle = '#27272a';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(20, 20, w - 40, h - 40);
+
+                    ctx.fillStyle = '#eab308'; // yellow-500
+                    ctx.font = `bold ${90 * card.scales.title}px "Noto Serif SC"`;
+                    ctx.fillText(card.title, 80, 150);
+
+                    ctx.fillStyle = '#52525b';
+                    ctx.font = `${30 * card.scales.eng}px sans-serif`;
+                    ctx.fillText(card.engTitle, 80, 150 + 90 * card.scales.title + 15);
+                    // 增加字间距模拟
+                    
+                    ctx.font = '100px sans-serif';
+                    ctx.fillText(card.icon, w - 180, 150);
+
+                    ctx.fillStyle = '#e5e7eb';
+                    ctx.font = `300 ${60 * card.scales.quote}px "Noto Sans SC"`;
+                    drawWrappedText(ctx, card.quote, 100, h/2 - 50, w - 200, 100 * card.scales.quote, 'left');
+
+                    ctx.fillStyle = '#3f3f46';
+                    ctx.fillRect(80, h - 300, 4, 80);
+
+                    ctx.fillStyle = '#71717a';
+                    ctx.font = `${40 * card.scales.desc}px "Noto Sans SC"`;
+                    drawWrappedText(ctx, card.desc, 100, h - 280, w - 200, 60 * card.scales.desc, 'left');
+
+                    ctx.fillStyle = '#ca8a04';
+                    ctx.fillRect(80, h - 120, ctx.measureText(card.tag).width + 40, 50);
+                    ctx.fillStyle = '#000000';
+                    ctx.font = '30px sans-serif';
+                    ctx.fillText(card.tag, 100, h - 85);
+
+                    ctx.fillStyle = '#52525b';
+                    const authW = ctx.measureText(card.author).width;
+                    ctx.fillText(card.author, w - 80 - authW, h - 85);
+                }
+            }
+        ];
+
+        // --- 组件：Canvas 渲染卡片 ---
+        const CanvasCard = ({ card, style, isSelected, onClick, scale = 1.0 }) => {
+            const canvasRef = useRef(null);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                
+                // 等待字体加载
+                document.fonts.ready.then(() => {
+                    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    if (style && style.draw) {
+                        style.draw(ctx, card, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    }
+                });
+            }, [card, style]);
+
+            const displayWidth = 300 * scale;
+            const displayHeight = 400 * scale;
+
+            return (
+                <div 
+                    onClick={onClick}
+                    className={`relative cursor-pointer transition-transform hover:scale-[1.02] ${isSelected ? 'card-highlight' : ''}`}
+                    style={{ width: displayWidth, height: displayHeight, margin: '10px' }}
+                >
+                    <canvas
+                        ref={canvasRef}
+                        width={CANVAS_WIDTH}
+                        height={CANVAS_HEIGHT}
+                        style={{ width: '100%', height: '100%', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                    />
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [cards, setCards] = useState(defaultCards);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [currentStyle, setCurrentStyle] = useState(styles[0]);
+            
+            const [previewCount, setPreviewCount] = useState(1);
+            const [previewScale, setPreviewScale] = useState(1.0);
+            const [isGlobalLock, setIsGlobalLock] = useState(true);
+
+            const [showImport, setShowImport] = useState(false);
+            const [importText, setImportText] = useState('');
+            const [downloading, setDownloading] = useState(false);
+            const [batchProgress, setBatchProgress] = useState(0);
+
+            const currentCard = cards[currentIndex];
+
+            // 批量下载
+            const downloadBatch = async () => {
+                if (cards.length === 0) return;
+                setDownloading(true);
+                const zip = new JSZip();
+
+                try {
+                    const offscreenCanvas = document.createElement('canvas');
+                    offscreenCanvas.width = CANVAS_WIDTH;
+                    offscreenCanvas.height = CANVAS_HEIGHT;
+                    const ctx = offscreenCanvas.getContext('2d');
+
+                    for (let i = 0; i < cards.length; i++) {
+                        setBatchProgress(Math.round(((i) / cards.length) * 100));
+                        currentStyle.draw(ctx, cards[i], CANVAS_WIDTH, CANVAS_HEIGHT);
+                        const blob = await new Promise(resolve => offscreenCanvas.toBlob(resolve, 'image/png'));
+                        zip.file(`${i+1}_${cards[i].title}.png`, blob);
+                        await new Promise(r => setTimeout(r, 10));
+                    }
+
+                    setBatchProgress(100);
+                    const content = await zip.generateAsync({ type: "blob" });
+                    saveAs(content, `Canvas批量卡片.zip`);
+
+                } catch (err) {
+                    console.error(err);
+                    alert("批量导出失败");
+                } finally {
+                    setDownloading(false);
+                    setBatchProgress(0);
+                }
+            };
+
+            const downloadSingle = async () => {
+                const offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = CANVAS_WIDTH;
+                offscreenCanvas.height = CANVAS_HEIGHT;
+                const ctx = offscreenCanvas.getContext('2d');
+                await document.fonts.ready;
+                currentStyle.draw(ctx, currentCard, CANVAS_WIDTH, CANVAS_HEIGHT);
+                offscreenCanvas.toBlob(blob => {
+                    saveAs(blob, `${currentCard.title}.png`);
+                }, 'image/png');
+            };
+
+            const cardsToDisplay = useMemo(() => {
+                const totalCards = cards.length;
+                const batchStart = Math.floor(currentIndex / previewCount) * previewCount;
+                let display = [];
+                for (let i = 0; i < previewCount; i++) {
+                    const idx = batchStart + i;
+                    if (idx < totalCards) display.push({ ...cards[idx], actualIndex: idx });
+                }
+                let filler = 0;
+                while (display.length < previewCount && filler < totalCards) {
+                    display.push({ isFiller: true, id: `fill-${filler}` });
+                    filler++;
+                }
+                return display;
+            }, [cards, currentIndex, previewCount]);
+
+            const handleNext = () => {
+                 const step = previewCount > 1 ? previewCount : 1;
+                 setCurrentIndex(prev => (prev + step) >= cards.length ? 0 : prev + step);
+            };
+            const handlePrev = () => {
+                const step = previewCount > 1 ? previewCount : 1;
+                setCurrentIndex(prev => {
+                    const next = prev - step;
+                    return next < 0 ? Math.floor((cards.length - 1) / step) * step : next;
+                });
+            };
+
+            const handleCardUpdate = (field, value) => {
+                const newCards = [...cards];
+                newCards[currentIndex] = { ...newCards[currentIndex], [field]: value };
+                setCards(newCards);
+            };
+            const adjustScale = (field, delta) => {
+                const change = delta / 10;
+                const updater = (c) => ({ ...c, scales: { ...c.scales, [field]: Math.max(0.2, (c.scales[field] || 1.0) + change) } });
+                if (isGlobalLock) setCards(prev => prev.map(updater));
+                else {
+                    const newCards = [...cards];
+                    newCards[currentIndex] = updater(newCards[currentIndex]);
+                    setCards(newCards);
+                }
+            };
+            const handleImport = () => {
+                try {
+                    const d = JSON.parse(importText);
+                    if(Array.isArray(d)) {
+                        setCards(d.map(c => ({ ...c, scales: {title:1,eng:1,quote:1,desc:1} })));
+                        setCurrentIndex(0); setShowImport(false);
+                    }
+                } catch(e){ alert("JSON Error"); }
+            };
+
+            // 修改后的紧凑输入组件
+            const ControlInput = ({ value, field, placeholder, multiline, scaleField }) => (
+                <div className="flex gap-2 items-stretch h-9"> {/* 固定高度 h-9 (36px) */}
+                    {multiline ? 
+                        <textarea 
+                            value={value} 
+                            onChange={e=>handleCardUpdate(field, e.target.value)} 
+                            className="flex-1 bg-[#333] border border-[#444] rounded px-2 py-1.5 text-white text-xs focus:outline-none resize-none input-scrollbar leading-tight" 
+                            placeholder={placeholder}
+                            style={{ whiteSpace: 'pre-wrap' }} // 允许换行但只显示一行
+                        /> :
+                        <input 
+                            type="text" 
+                            value={value} 
+                            onChange={e=>handleCardUpdate(field, e.target.value)} 
+                            className="flex-1 bg-[#333] border border-[#444] rounded px-2 py-1 text-white text-xs focus:outline-none" 
+                            placeholder={placeholder} 
+                        />
+                    }
+                    {scaleField && (
+                        <div className="flex flex-col w-6 gap-[1px]"> {/* 更窄的按钮 */}
+                             <button onClick={()=>adjustScale(scaleField, 1)} className="flex-1 bg-[#444] text-white text-[10px] rounded-t hover:bg-[#555] flex items-center justify-center">＋</button>
+                             <button onClick={()=>adjustScale(scaleField, -1)} className="flex-1 bg-[#444] text-white text-[10px] rounded-b hover:bg-[#555] flex items-center justify-center">－</button>
+                        </div>
+                    )}
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen flex flex-col md:flex-row bg-[#111]">
+                    {/* 右侧预览 (置顶/右侧) */}
+                    <div className="flex-1 bg-[#111] flex flex-col order-1 md:order-2 overflow-hidden h-[50vh] md:h-screen">
+                        <div className="flex items-center justify-between px-4 py-3 bg-[#1a1a1a] border-b border-[#333]">
+                            <div className="flex gap-2">
+                                <button onClick={handlePrev} className="w-8 h-8 bg-[#333] text-gray-400 rounded-full hover:bg-[#444]">←</button>
+                                <span className="text-xs font-mono text-gray-500 flex items-center">{currentIndex+1}/{cards.length}</span>
+                                <button onClick={handleNext} className="w-8 h-8 bg-[#333] text-gray-400 rounded-full hover:bg-[#444]">→</button>
+                            </div>
+                            <div className="flex gap-4 items-center">
+                                <div className="flex items-center gap-1">
+                                    <button onClick={()=>setPreviewScale(s=>Math.max(0.2,s-0.1))} className="p-1 text-gray-400 hover:text-white text-lg">-</button>
+                                    <span className="text-xs text-gray-500 w-8 text-center">{Math.round(previewScale*100)}%</span>
+                                    <button onClick={()=>setPreviewScale(s=>Math.min(2,s+0.1))} className="p-1 text-gray-400 hover:text-white text-lg">+</button>
+                                </div>
+                                <div className="flex border border-[#333] rounded overflow-hidden">
+                                    {[1,2,3,6].map(n => (
+                                        <button key={n} onClick={()=>setPreviewCount(n)} className={`px-3 py-1 text-xs ${previewCount===n?'bg-blue-600 text-white':'bg-[#222] text-gray-500'}`}>{n}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto p-4 flex flex-wrap content-start justify-center gap-4 bg-[#0c0c0c]">
+                            {cardsToDisplay.map((item, idx) => (
+                                item.isFiller ? 
+                                <div key={idx} style={{width: 300*previewScale, height: 400*previewScale}} className="border border-dashed border-[#333] flex items-center justify-center text-[#333]">空</div> :
+                                <CanvasCard 
+                                    key={idx} 
+                                    card={item} 
+                                    style={currentStyle} 
+                                    scale={previewScale}
+                                    isSelected={item.actualIndex === currentIndex}
+                                    onClick={() => setCurrentIndex(item.actualIndex)}
+                                />
+                            ))}
+                        </div>
+
+                        <div className="p-4 bg-[#1a1a1a] border-t border-[#333] flex gap-3 justify-center">
+                            {downloading ? 
+                                <span className="text-blue-500 animate-pulse text-sm font-bold">正在原生绘制... {batchProgress}%</span> :
+                                <>
+                                    <button onClick={downloadSingle} className="px-6 py-2 bg-gray-700 text-white text-sm font-bold rounded hover:bg-gray-600">保存单张</button>
+                                    <button onClick={downloadBatch} className="px-6 py-2 bg-blue-600 text-white text-sm font-bold rounded hover:bg-blue-500">批量 Canvas 导出</button>
+                                </>
+                            }
+                        </div>
+                    </div>
+
+                    {/* 左侧编辑 - 紧凑版 */}
+                    <div className="w-full md:w-[320px] bg-[#1a1a1a] border-r border-[#333] flex flex-col order-2 md:order-1 h-[50vh] md:h-screen shadow-xl z-10">
+                        <div className="p-3 border-b border-[#333] flex gap-2">
+                             <button onClick={()=>setShowImport(true)} className="flex-1 bg-green-700 hover:bg-green-600 text-white py-1.5 rounded text-xs font-bold transition-colors">JSON 导入</button>
+                             <button onClick={()=>{if(confirm('清空?')) setCards([defaultCards[0]])}} className="bg-red-900/50 hover:bg-red-900/80 text-red-200 px-3 rounded transition-colors">🗑️</button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-3 space-y-2.5 no-scrollbar">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">内容编辑</span>
+                                <button onClick={()=>setIsGlobalLock(!isGlobalLock)} className={`text-[10px] px-2 py-0.5 rounded border transition-all ${isGlobalLock?'bg-blue-900/50 text-blue-200 border-blue-800':'border-[#333] text-gray-500 hover:text-gray-300'}`}>
+                                    {isGlobalLock ? '🔒 批量调整' : '🔓 单张调整'}
+                                </button>
+                            </div>
+
+                            <ControlInput field="title" value={currentCard.title} placeholder="标题" scaleField="title" />
+                            <ControlInput field="icon" value={currentCard.icon} placeholder="图标" />
+                            <ControlInput field="engTitle" value={currentCard.engTitle} placeholder="英文" scaleField="eng" />
+                            <ControlInput field="quote" value={currentCard.quote} placeholder="金句 (可滚动)" multiline scaleField="quote" />
+                            <ControlInput field="desc" value={currentCard.desc} placeholder="描述 (可滚动)" multiline scaleField="desc" />
+                            <div className="grid grid-cols-2 gap-2">
+                                <ControlInput field="tag" value={currentCard.tag} placeholder="#标签" />
+                                <ControlInput field="author" value={currentCard.author} placeholder="@作者" />
+                            </div>
+
+                            <div className="pt-3 border-t border-[#333] mt-2">
+                                <div className="text-[10px] font-bold text-gray-500 mb-2 uppercase tracking-wider">风格选择</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {styles.map(s => (
+                                        <button key={s.id} onClick={()=>setCurrentStyle(s)} className={`py-1.5 px-2 text-xs text-center rounded border transition-all ${currentStyle.id===s.id?'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-900/50':'bg-[#222] border-[#333] text-gray-400 hover:bg-[#2a2a2a]'}`}>
+                                            {s.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                     {/* 导入弹窗 */}
+                     {showImport && (
+                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+                            <div className="bg-[#222] w-full max-w-lg rounded-xl border border-[#444] flex flex-col h-[50vh]">
+                                <div className="p-4 border-b border-[#333] flex justify-between text-white font-bold"><span>导入 JSON</span><button onClick={() => setShowImport(false)}>✕</button></div>
+                                <textarea value={importText} onChange={(e) => setImportText(e.target.value)} className="flex-1 bg-[#111] text-green-400 p-4 resize-none outline-none font-mono text-xs" placeholder='JSON 数组...'></textarea>
+                                <button onClick={handleImport} className="bg-blue-600 active:bg-blue-500 text-white py-3 font-bold m-4 rounded">确认解析</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
